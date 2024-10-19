@@ -8,8 +8,24 @@ import { v4 as uuidv4 } from "uuid";
 config();
 
 const main = async () => {
+  /**
+  * PUBLIC CONNECTOR EXAMPLE
+  */
+  
   // Initialize the public connector
   const publicConnector = new KuCoinPublicConnector(onMessage);
+  
+  // Add desired subscription channels for the public connector
+  publicConnector.addSubscription("/market/ticker:ETH-USDT");
+  publicConnector.addSubscription("/market/match:BTC-USDT");
+  publicConnector.addSubscription("/market/level2:BTC-USDT");
+  
+  // Connect the public connector
+  await publicConnector.connect();
+
+  /**
+   * PRIVATE CONNECTOR EXAMPLE
+   */
 
   // Initialize the private connector
   const apiKey = process.env.KUCOIN_API_KEY;
@@ -26,14 +42,6 @@ const main = async () => {
     apiPassphrase,
     onMessage
   );
-
-  // Add desired subscription channels for the public connector
-  publicConnector.addSubscription("/market/ticker:BTC-USDT");
-  publicConnector.addSubscription("/market/match:BTC-USDT");
-  publicConnector.addSubscription("/market/level2:BTC-USDT");
-
-  // Connect the public connector
-  await publicConnector.connect();
 
   // Connect the private connector
   await privateConnector.connect();
@@ -67,7 +75,7 @@ const main = async () => {
 
   const shutdown = async () => {
     logger.info("Shutting down connectors...");
-    publicConnector.stop();
+    // publicConnector.stop();
     privateConnector.stop();
     logger.info("Connectors stopped.");
     process.exit(0);

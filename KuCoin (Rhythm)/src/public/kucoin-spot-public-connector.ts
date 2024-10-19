@@ -40,6 +40,14 @@ export class KuCoinPublicConnector {
   }
 
   /**
+   * Removes a subscription channel to the connector.
+   * @param channel - The subscription topic, e.g., '/market/ticker:BTC-USDT'
+   */
+  public removeSubscription(channel: string) {
+    this.subscriptions = this.subscriptions.filter((sub) => sub !== channel);
+  }
+
+  /**
    * Obtains the bullet public token required for WebSocket connection.
    * @returns An object containing instance servers and the token.
    */
@@ -50,13 +58,6 @@ export class KuCoinPublicConnector {
         `${this.apiBaseUrl}${endpoint}`
       );
       logger.info(`Obtained bullet public token.`);
-      logger.info(
-        `Instance Servers: ${JSON.stringify(
-          response.data.data.instanceServers,
-          null,
-          2
-        )}`
-      ); // Detailed logging
       return response.data.data;
     } catch (error: any) {
       logger.error(
@@ -175,6 +176,22 @@ export class KuCoinPublicConnector {
       };
       this.connection?.send(JSON.stringify(subscribeMessage));
       logger.info(`Subscribed to channel: ${channel}`);
+    }
+  }
+
+  /**
+   * Unsubscribes to all added channels.
+   */
+  private async unsubscribe() {
+    for (const channel of this.subscriptions) {
+      const subscribeMessage = {
+        id: Date.now(),
+        type: "unsubscribe",
+        topic: channel,
+        response: true,
+      };
+      this.connection?.send(JSON.stringify(subscribeMessage));
+      logger.info(`Unsubscribed from channel: ${channel}`);
     }
   }
 

@@ -1,12 +1,9 @@
 import WebSocket from "ws";
 import axios from "axios";
 import crypto from "crypto";
-import {
-  BulletResponse,
-  PlaceOrderRequest,
-  WebSocketMessage,
-} from "../types";
+import { BulletResponse, PlaceOrderRequest, WebSocketMessage } from "../types";
 import logger from "../logger";
+import RateLimiter from "../rate-limiter";
 
 type MessageCallback = (data: any) => void;
 
@@ -29,6 +26,7 @@ export class KuCoinPrivateConnector {
   private listenKeyTTL: number = 60 * 60 * 1000; // 1 hour
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 10;
+  private rateLimiter: RateLimiter;
 
   constructor(
     apiKey: string,
@@ -46,6 +44,7 @@ export class KuCoinPrivateConnector {
     this.subscriptions = [];
     this.keepRunning = true;
     this.reconnectInterval = 5000; // Initial 5 seconds
+    this.rateLimiter = new RateLimiter(60, 1000); // 60 requests per second
   }
 
   /**
@@ -54,6 +53,14 @@ export class KuCoinPrivateConnector {
    */
   public addSubscription(channel: string) {
     this.subscriptions.push(channel);
+  }
+
+  /**
+   * Removes a subscription channel to the connector.
+   * @param channel - The subscription topic, e.g., '/market/ticker:BTC-USDT'
+   */
+  public removeSubscription(channel: string) {
+    this.subscriptions = this.subscriptions.filter((sub) => sub !== channel);
   }
 
   /**
@@ -230,11 +237,27 @@ export class KuCoinPrivateConnector {
   }
 
   /**
+   * Unsubscribes to all added channels.
+   */
+  private async unsubscribe() {
+    for (const channel of this.subscriptions) {
+      const subscribeMessage = {
+        id: Date.now(),
+        type: "unsubscribe",
+        topic: channel,
+        response: true,
+      };
+      this.connection?.send(JSON.stringify(subscribeMessage));
+      logger.info(`Unsubscribed from channel: ${channel}`);
+    }
+  }
+
+  /**
    * Places an order (buy/sell) via the REST API.
    * @param orderRequest - The order request containing order details.
    */
   public async placeOrder(orderRequest: PlaceOrderRequest) {
-    const endpoint = "/api/v1/orders";
+    const endpoint = "/api/v1/orders"; // when testing, use /api/v1/orders/test
     const method = "POST";
     const body = JSON.stringify(orderRequest);
     const { signature, timestamp } = this.generateSignature(
@@ -243,37 +266,39 @@ export class KuCoinPrivateConnector {
       body
     );
 
-    try {
-      const response = await axios.post(
-        `${this.apiBaseUrl}${endpoint}`,
-        orderRequest,
-        {
-          headers: {
-            "KC-API-KEY": this.apiKey,
-            "KC-API-SIGN": signature,
-            "KC-API-TIMESTAMP": timestamp,
-            "KC-API-PASSPHRASE": crypto
-              .createHmac("sha256", this.apiSecret)
-              .update(this.apiPassphrase)
-              .digest("base64"),
-            "KC-API-KEY-VERSION": "3",
-            "Content-Type": "application/json",
-          },
+    return this.rateLimiter.scheduleRequest(async () => {
+      try {
+        const response = await axios.post(
+          `${this.apiBaseUrl}${endpoint}`,
+          orderRequest,
+          {
+            headers: {
+              "KC-API-KEY": this.apiKey,
+              "KC-API-SIGN": signature,
+              "KC-API-TIMESTAMP": timestamp,
+              "KC-API-PASSPHRASE": crypto
+                .createHmac("sha256", this.apiSecret)
+                .update(this.apiPassphrase)
+                .digest("base64"),
+              "KC-API-KEY-VERSION": "3",
+              "Content-Type": "application/json",
+            },
+          }
+        );
+        if (response.data.code !== "200000") {
+          logger.error(`Error placing order: ${response.data.msg}`);
+          throw new Error(`Error placing order: ${response.data.msg}`);
         }
-      );
-      if (response.data.code !== "200000") {
-        logger.error(`Error placing order: ${response.data.msg}`);
-        throw new Error(`Error placing order: ${response.data.msg}`);
+        logger.info(
+          `Order placed successfully: ${JSON.stringify(response.data)}`
+        );
+      } catch (error: any) {
+        logger.error(
+          `Error placing order: ${error.response?.data?.msg || error.message}`
+        );
+        throw error;
       }
-      logger.info(
-        `Order placed successfully: ${JSON.stringify(response.data)}`
-      );
-    } catch (error: any) {
-      logger.error(
-        `Error placing order: ${error.response?.data?.msg || error.message}`
-      );
-      throw error;
-    }
+    });
   }
 
   /**
@@ -290,30 +315,32 @@ export class KuCoinPrivateConnector {
       body
     );
 
-    try {
-      const response = await axios.delete(`${this.apiBaseUrl}${endpoint}`, {
-        headers: {
-          "KC-API-KEY": this.apiKey,
-          "KC-API-SIGN": signature,
-          "KC-API-TIMESTAMP": timestamp,
-          "KC-API-PASSPHRASE": crypto
-            .createHmac("sha256", this.apiSecret)
-            .update(this.apiPassphrase)
-            .digest("base64"),
-          "KC-API-KEY-VERSION": "3",
-        },
-      });
+    return this.rateLimiter.scheduleRequest(async () => {
+      try {
+        const response = await axios.delete(`${this.apiBaseUrl}${endpoint}`, {
+          headers: {
+            "KC-API-KEY": this.apiKey,
+            "KC-API-SIGN": signature,
+            "KC-API-TIMESTAMP": timestamp,
+            "KC-API-PASSPHRASE": crypto
+              .createHmac("sha256", this.apiSecret)
+              .update(this.apiPassphrase)
+              .digest("base64"),
+            "KC-API-KEY-VERSION": "3",
+          },
+        });
 
-      logger.info(`Successfully canceled order with ID: ${orderId}`);
-      return response.data;
-    } catch (error: any) {
-      logger.error(
-        `Error canceling order with ID: ${orderId}: ${
-          error.response?.data?.msg || error.message
-        }`
-      );
-      throw error;
-    }
+        logger.info(`Successfully canceled order with ID: ${orderId}`);
+        return response.data;
+      } catch (error: any) {
+        logger.error(
+          `Error canceling order with ID: ${orderId}: ${
+            error.response?.data?.msg || error.message
+          }`
+        );
+        throw error;
+      }
+    });
   }
 
   /**
@@ -330,41 +357,45 @@ export class KuCoinPrivateConnector {
       body
     );
 
-    try {
-      const response = await axios.get(`${this.apiBaseUrl}${endpoint}`, {
-        headers: {
-          "KC-API-KEY": this.apiKey,
-          "KC-API-SIGN": signature,
-          "KC-API-TIMESTAMP": timestamp,
-          "KC-API-PASSPHRASE": crypto
-            .createHmac("sha256", this.apiSecret)
-            .update(this.apiPassphrase)
-            .digest("base64"),
-          "KC-API-KEY-VERSION": "3",
-        },
-      });
+    return this.rateLimiter.scheduleRequest(async () => {
+      try {
+        const response = await axios.get(`${this.apiBaseUrl}${endpoint}`, {
+          headers: {
+            "KC-API-KEY": this.apiKey,
+            "KC-API-SIGN": signature,
+            "KC-API-TIMESTAMP": timestamp,
+            "KC-API-PASSPHRASE": crypto
+              .createHmac("sha256", this.apiSecret)
+              .update(this.apiPassphrase)
+              .digest("base64"),
+            "KC-API-KEY-VERSION": "3",
+          },
+        });
 
-      // Check if the data contains the symbol's balance
-      const balances = response.data.data;
-      const balanceForSymbol = balances.find(
-        (balance: any) => balance.currency === symbol
-      );
-
-      if (balanceForSymbol) {
-        logger.info(
-          `Balance for ${symbol}: ${JSON.stringify(balanceForSymbol)}`
+        // Check if the data contains the symbol's balance
+        const balances = response.data.data;
+        const balanceForSymbol = balances.find(
+          (balance: any) => balance.currency === symbol
         );
-      } else {
-        logger.info(`No balance found for ${symbol}`);
-      }
 
-      return balanceForSymbol;
-    } catch (error: any) {
-      logger.error(
-        `Error fetching balance: ${error.response?.data?.msg || error.message}`
-      );
-      throw error;
-    }
+        if (balanceForSymbol) {
+          logger.info(
+            `Balance for ${symbol}: ${JSON.stringify(balanceForSymbol)}`
+          );
+        } else {
+          logger.info(`No balance found for ${symbol}`);
+        }
+
+        return balanceForSymbol;
+      } catch (error: any) {
+        logger.error(
+          `Error fetching balance: ${
+            error.response?.data?.msg || error.message
+          }`
+        );
+        throw error;
+      }
+    });
   }
 
   /**
@@ -425,12 +456,17 @@ export class KuCoinPrivateConnector {
    * Pings the server at regular intervals to keep the connection alive.
    */
   private startPing() {
-    setInterval(() => {
+    let pingInterval: NodeJS.Timeout | null = null;
+    const sendPing = () => {
       if (this.connection?.readyState === WebSocket.OPEN) {
         const pingMessage = { id: Date.now(), type: "ping" };
         this.connection.send(JSON.stringify(pingMessage));
         logger.info("Ping sent to server.");
       }
-    }, 30000); // Ping every 30 seconds
+    };
+
+    if (!pingInterval) {
+      pingInterval = setInterval(sendPing, 5000); // ping every 1 second
+    }
   }
 }
