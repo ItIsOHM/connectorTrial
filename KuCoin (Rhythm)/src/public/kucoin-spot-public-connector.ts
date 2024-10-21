@@ -113,6 +113,7 @@ export class KuCoinPublicConnector {
 
       this.connection.on("message", (data: WebSocket.Data) => {
         try {
+          // logger.info(`Received message: ${data.toString()}`);
           const parsedData: WebSocketMessage = JSON.parse(data.toString());
           this.handleMessage(parsedData);
         } catch (error) {
@@ -200,14 +201,18 @@ export class KuCoinPublicConnector {
    * @param data - The parsed WebSocket message.
    */
   private handleMessage(data: WebSocketMessage) {
-    logger.info(`Received message: ${JSON.stringify(data)}`);
+    if (data.type === "message" && data.data) {
+      if (data.subject === "trade.l3match") {
+        // Convert time from nanoseconds to milliseconds
+        const timestampInMs = parseInt(data.data.time) / 1_000_000;
+        const formattedTime = new Date(timestampInMs);
 
-    if (data.type === "message") {
-      if (data.data) {
-        this.onMessageCallback(data.data);
-      } else {
-        logger.warn(`Received message without data: ${JSON.stringify(data)}`);
+        if (isNaN(formattedTime.getTime())) {
+          logger.error(`Invalid time value: ${data.data.time}`);
+        }
       }
+
+      this.onMessageCallback(data.data);
     } else if (data.type === "welcome") {
       logger.info("Received welcome message.");
     } else if (data.type === "ack") {

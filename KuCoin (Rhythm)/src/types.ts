@@ -26,6 +26,7 @@ export interface InstanceServer {
 export interface WebSocketMessage {
   id?: string;            // Optional message ID
   type: string;           // Message type (e.g., 'ticker', 'order')
+  subject?: string;       // Subject of the message (optional)
   topic?: string;         // Topic of the message (optional)
   response?: boolean;     // Indicates if it's a response
   data?: any;             // Message payload data

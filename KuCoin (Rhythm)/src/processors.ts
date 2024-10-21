@@ -61,12 +61,13 @@ export const processOrderbook = throttle((data: OrderBookData) => {
  */
 export function processMatchEvent(data: MatchEventData) {
   const { symbol, price, size, side, tradeId, time } = data;
+  const timestampInMs = time / 1_000_000;
+  const formattedTime = new Date(timestampInMs);
   logger.info(
     `Match - Symbol: ${symbol}, Side: ${side}, Price: ${price}, Size: ${size}, Trade ID: ${tradeId}, Time: ${formatTime(
-      time
+      timestampInMs
     )}`
   );
-  // Further processing or storage logic
 }
 
 /**
